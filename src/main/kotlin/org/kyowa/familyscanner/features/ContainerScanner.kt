@@ -4,7 +4,6 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.client.gui.screen.ingame.HandledScreen
 import net.minecraft.item.Item
 import net.minecraft.item.tooltip.TooltipType
-import net.minecraft.text.TranslatableTextContent
 import org.kyowa.familyscanner.FamilyScanner
 
 object ContainerScanner {
@@ -20,9 +19,7 @@ object ContainerScanner {
                 return@register
             }
 
-            val titleContent = screen.title.content
-            if (titleContent !is TranslatableTextContent ||
-                (titleContent.key != "container.chest" && titleContent.key != "container.chestDouble")) {
+            if (!screen.title.string.equals("Loot Chest", ignoreCase = true)) {
                 matchingSlots.clear()
                 hasMatch = false
                 return@register
