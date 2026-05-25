@@ -6,6 +6,8 @@ import net.minecraft.item.Item
 import net.minecraft.item.tooltip.TooltipType
 import org.kyowa.familyscanner.FamilyScanner
 
+private val COLOR_CODE_REGEX = Regex("§[0-9a-fklmnorA-FKLMNOR]")
+
 object ContainerScanner {
     val matchingSlots: MutableSet<Int> = mutableSetOf()
     var hasMatch: Boolean = false
@@ -19,7 +21,8 @@ object ContainerScanner {
                 return@register
             }
 
-            if (!screen.title.string.contains("Loot Chest", ignoreCase = true)) {
+            val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
+            if (!title.contains("Loot Chest", ignoreCase = true)) {
                 matchingSlots.clear()
                 hasMatch = false
                 return@register
@@ -48,7 +51,7 @@ object ContainerScanner {
                     TooltipType.Default.BASIC
                 )
 
-                val tooltipText = tooltipLines.joinToString("\n") { it.string.lowercase() }
+                val tooltipText = tooltipLines.joinToString("\n") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
 
                 if (keywords.any { keyword -> tooltipText.contains(keyword) }) {
                     newMatching.add(slot.id)

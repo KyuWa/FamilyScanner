@@ -20,7 +20,7 @@ abstract class HandledScreenMixin<T : ScreenHandler> {
     private fun onKeyPressed(keyCode: Int, scanCode: Int, modifiers: Int, ci: CallbackInfoReturnable<Boolean>) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE && ContainerScanner.hasMatch) {
             if ((modifiers and GLFW.GLFW_MOD_CONTROL) == 0) {
-                MinecraftClient.getInstance().player?.playSound(SoundEvents.BLOCK_ANVIL_BREAK.value(), 1.0f, 1.0f)
+                MinecraftClient.getInstance().player?.playSound(SoundEvents.BLOCK_ANVIL_BREAK, 1.0f, 1.0f)
                 ci.returnValue = true
                 ci.cancel()
             }
