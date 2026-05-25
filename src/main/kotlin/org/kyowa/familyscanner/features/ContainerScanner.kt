@@ -22,6 +22,7 @@ object ContainerScanner {
     }
 
     // ── GearBox possibilities ────────────────────────────────────────────────
+
     private data class GearBoxProps(
         val gearType: String,
         val gearTier: String,
@@ -41,7 +42,6 @@ object ContainerScanner {
             Class.forName("com.wynntils.core.components.Models")
         } catch (_: Exception) { return null }
 
-        // Try well-known field names first, then fall back to scanning
         val modelInstance: Any = listOf("Gear", "GearItem", "Item", "WynnItem").firstNotNullOfOrNull { name ->
             try { modelsClass.getField(name).get(null) } catch (_: Exception) { null }
         } ?: modelsClass.fields.firstNotNullOfOrNull { field ->
@@ -49,17 +49,21 @@ object ContainerScanner {
                 val inst = field.get(null) ?: return@firstNotNullOfOrNull null
                 val hasGearListMethod = inst.javaClass.methods.any { m ->
                     m.parameterCount == 0 &&
-                    m.name.lowercase().let { n -> n.contains("gear") && (n.contains("all") || n.contains("info") || n.contains("list")) }
+                    m.name.lowercase().let { n ->
+                        n.contains("gear") && (n.contains("all") || n.contains("info") || n.contains("list"))
+                    }
                 }
                 if (hasGearListMethod) inst else null
             } catch (_: Exception) { null }
         } ?: return null
 
+        // Accept any 0-arg method that returns Iterable/Collection/Stream/Map
         val method = modelInstance.javaClass.methods.firstOrNull { m ->
             m.parameterCount == 0 &&
             (java.lang.Iterable::class.java.isAssignableFrom(m.returnType) ||
              java.util.Collection::class.java.isAssignableFrom(m.returnType) ||
-             java.util.stream.Stream::class.java.isAssignableFrom(m.returnType)) &&
+             java.util.stream.Stream::class.java.isAssignableFrom(m.returnType) ||
+             java.util.Map::class.java.isAssignableFrom(m.returnType)) &&
             m.name.lowercase().let { n ->
                 (n.contains("all") || n.contains("gear") || n.contains("info") || n.contains("item")) &&
                 !n.contains("set") && !n.contains("add")
@@ -79,14 +83,19 @@ object ContainerScanner {
         return if (!s.contains('@')) s.ifEmpty { null } else null
     }
 
+    // Handles int, Number, Optional<Number>, OptionalInt, OptionalLong
     private fun asInt(v: Any?): Int? = when (v) {
         is Int -> v
         is Number -> v.toInt()
         is java.util.Optional<*> -> (v.orElse(null) as? Number)?.toInt()
+        is java.util.OptionalInt -> if (v.isPresent) v.asInt else null
+        is java.util.OptionalLong -> if (v.isPresent) v.asLong.toInt() else null
         else -> null
     }
 
+    // Tries both Java record-style accessors (type()) and traditional getters (getType())
     private fun getGearTierStr(item: Any): String? {
+        asString(invokeGetter(item, "tier"))?.let { return it }
         asString(invokeGetter(item, "getGearTier"))?.let { return it }
         asString(invokeGetter(item, "getTier"))?.let { return it }
         val meta = invokeGetter(item, "metaInfo") ?: invokeGetter(item, "getMetaInfo") ?: return null
@@ -96,6 +105,7 @@ object ContainerScanner {
     }
 
     private fun getGearTypeStr(item: Any): String? {
+        asString(invokeGetter(item, "type"))?.let { return it }
         asString(invokeGetter(item, "getGearType"))?.let { return it }
         asString(invokeGetter(item, "getType"))?.let { return it }
         val meta = invokeGetter(item, "metaInfo") ?: invokeGetter(item, "getMetaInfo") ?: return null
@@ -105,8 +115,8 @@ object ContainerScanner {
     }
 
     private fun getItemLevelInt(item: Any): Int? {
-        asInt(invokeGetter(item, "getLevel"))?.let { return it }
         asInt(invokeGetter(item, "level"))?.let { return it }
+        asInt(invokeGetter(item, "getLevel"))?.let { return it }
         val reqs = invokeGetter(item, "requirements") ?: invokeGetter(item, "getRequirements") ?: return null
         asInt(invokeGetter(reqs, "level"))?.let { return it }
         asInt(invokeGetter(reqs, "getLevel"))?.let { return it }
@@ -121,6 +131,13 @@ object ContainerScanner {
         return null
     }
 
+    private fun rawToList(raw: Any?): List<Any> = when (raw) {
+        is java.util.stream.Stream<*> -> raw.toList()
+        is Map<*, *> -> raw.values.toList()
+        is Iterable<*> -> raw.toList()
+        else -> emptyList()
+    }.filterNotNull()
+
     private fun extractGearBoxProps(annotation: Any): GearBoxProps? {
         return try {
             val cls = annotation.javaClass
@@ -129,14 +146,12 @@ object ContainerScanner {
             val gearTier = cls.getMethod("getGearTier").invoke(annotation)?.toString()
                 ?: return null
             val maxLevel = cls.getMethod("getLevel").invoke(annotation) as? Int ?: return null
-
             val rangeStr = try {
                 cls.getMethod("getLevelRange").invoke(annotation)?.toString() ?: ""
             } catch (_: Exception) { "" }
-            // rangeStr is like "<81-85>"
+            // e.g. "<81-85>"
             val minLevel = Regex("""<(\d+)-(\d+)>""").find(rangeStr)
                 ?.groupValues?.get(1)?.toIntOrNull() ?: maxLevel
-
             GearBoxProps(gearType, gearTier, minLevel, maxLevel)
         } catch (_: Exception) { null }
     }
@@ -155,13 +170,7 @@ object ContainerScanner {
     private fun computePossibleGearNames(props: GearBoxProps): List<String> {
         val (modelInstance, getAllMethod) = wynntilsGearModelPair ?: return emptyList()
         val raw = try { getAllMethod.invoke(modelInstance) } catch (_: Exception) { return emptyList() }
-        @Suppress("UNCHECKED_CAST")
-        val allItems: List<Any> = when (raw) {
-            is java.util.stream.Stream<*> -> raw.toList()
-            is Iterable<*> -> raw.toList()
-            else -> return emptyList()
-        }.filterNotNull()
-        return allItems.mapNotNull { matchGearInfo(it, props) }.sorted()
+        return rawToList(raw).mapNotNull { matchGearInfo(it, props) }.sorted()
     }
 
     private fun getPossibleGearNames(props: GearBoxProps): List<String> =
@@ -289,8 +298,7 @@ object ContainerScanner {
 
         val annotation = resolveAnnotation(stack)
         if (annotation == null) {
-            val handler = wynntilsHandlerAndMethod
-            if (handler == null) {
+            if (wynntilsHandlerAndMethod == null) {
                 player.sendMessage(Text.literal("§c  [W] Wynntils ItemHandler not found"), false)
             } else {
                 player.sendMessage(Text.literal("§c  [W] No annotation on this item"), false)
@@ -329,7 +337,7 @@ object ContainerScanner {
             }
         } catch (_: Exception) {}
 
-        // GearBoxItem: show possible items from Wynntils DB
+        // GearBoxItem: diagnose DB and show possible items
         if (annotation.javaClass.simpleName == "GearBoxItem") {
             val props = extractGearBoxProps(annotation)
             if (props == null) {
@@ -340,6 +348,29 @@ object ContainerScanner {
                 player.sendMessage(Text.literal("§c  [Possibilities] Wynntils gear model not found"), false)
                 return
             }
+
+            // DB diagnostic: show total size, first item class/methods/resolved values
+            try {
+                val (mi, gm) = wynntilsGearModelPair!!
+                val raw = gm.invoke(mi)
+                val allItems = rawToList(raw)
+                player.sendMessage(Text.literal("§7  [DB] ${allItems.size} total items, returnType=${gm.returnType.simpleName}"), false)
+                if (allItems.isNotEmpty()) {
+                    val fi = allItems.first()
+                    val methodNames = fi.javaClass.methods
+                        .filter { it.parameterCount == 0 && it.declaringClass != Any::class.java }
+                        .take(10).joinToString(", ") { it.name }
+                    player.sendMessage(Text.literal("§7  [DB] class=${fi.javaClass.simpleName} methods=[$methodNames]"), false)
+                    val sType = getGearTypeStr(fi) ?: "?"
+                    val sTier = getGearTierStr(fi) ?: "?"
+                    val sLv = getItemLevelInt(fi)?.toString() ?: "?"
+                    val sName = getItemNameStr(fi) ?: "?"
+                    player.sendMessage(Text.literal("§7  [DB] sample: name=§f$sName§7 type=§f$sType§7 tier=§f$sTier§7 lv=§f$sLv"), false)
+                }
+            } catch (e: Exception) {
+                player.sendMessage(Text.literal("§c  [DB] Diagnostic error: ${e.message?.take(80)}"), false)
+            }
+
             val possibleNames = getPossibleGearNames(props)
             if (possibleNames.isEmpty()) {
                 player.sendMessage(
