@@ -20,21 +20,19 @@ import org.kyowa.familyscanner.features.ContainerScanner
 @Mixin(HandledScreen::class)
 abstract class HandledScreenMixin<T : ScreenHandler> {
 
-    // Intercept keyPressed so we have reliable Ctrl detection via the modifiers bitmask.
-    // Injecting into close() loses the modifier state; keyPressed fires before close() is called.
+    // In 1.21.11 keyPressed takes a single key-event object instead of (int,int,int).
+    // We capture no parameters and read key state from GLFW instead.
     @Inject(method = ["keyPressed"], at = [At("HEAD")], cancellable = true)
-    private fun onKeyPressed(
-        keyCode: Int,
-        scanCode: Int,
-        modifiers: Int,
-        ci: CallbackInfoReturnable<Boolean>
-    ) {
-        if (keyCode != GLFW.GLFW_KEY_ESCAPE) return
+    private fun onKeyPressed(ci: CallbackInfoReturnable<Boolean>) {
+        val client = MinecraftClient.getInstance()
+        val window = client.window.handle
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_ESCAPE) != GLFW.GLFW_PRESS) return
         if (!ContainerScanner.hasMatch) return
         if (!FamilyScanner.config.blockCloseEnabled) return
-        val ctrlHeld = (modifiers and GLFW.GLFW_MOD_CONTROL) != 0
+        val ctrlHeld = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS ||
+                       GLFW.glfwGetKey(window, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS
         if (!ctrlHeld) {
-            MinecraftClient.getInstance().soundManager.play(
+            client.soundManager.play(
                 PositionedSoundInstance(
                     SoundEvents.BLOCK_ANVIL_BREAK,
                     SoundCategory.MASTER,
