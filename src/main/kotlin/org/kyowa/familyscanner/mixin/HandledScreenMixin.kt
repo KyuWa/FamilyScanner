@@ -1,47 +1,21 @@
 package org.kyowa.familyscanner.mixin
 
-import net.minecraft.client.MinecraftClient
 import net.minecraft.client.gui.DrawContext
 import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.client.sound.PositionedSoundInstance
 import net.minecraft.screen.ScreenHandler
-import net.minecraft.sound.SoundCategory
-import net.minecraft.sound.SoundEvents
-import net.minecraft.util.math.random.Random
-import org.lwjgl.glfw.GLFW
 import org.spongepowered.asm.mixin.Mixin
 import org.spongepowered.asm.mixin.injection.At
 import org.spongepowered.asm.mixin.injection.Inject
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable
 import org.kyowa.familyscanner.FamilyScanner
 import org.kyowa.familyscanner.features.ContainerScanner
 
 @Mixin(HandledScreen::class)
 abstract class HandledScreenMixin<T : ScreenHandler> {
 
-    // In 1.21.11 keyPressed takes a single key-event object instead of (int,int,int).
-    // We capture no parameters and read key state from GLFW instead.
-    @Inject(method = ["keyPressed"], at = [At("HEAD")], cancellable = true)
-    private fun onKeyPressed(ci: CallbackInfoReturnable<Boolean>) {
-        val client = MinecraftClient.getInstance()
-        val window = client.window.handle
-        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_ESCAPE) != GLFW.GLFW_PRESS) return
-        if (!ContainerScanner.hasMatch) return
-        if (!FamilyScanner.config.blockCloseEnabled) return
-        val ctrlHeld = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS ||
-                       GLFW.glfwGetKey(window, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS
-        if (!ctrlHeld) {
-            client.soundManager.play(
-                PositionedSoundInstance(
-                    SoundEvents.BLOCK_ANVIL_BREAK,
-                    SoundCategory.MASTER,
-                    1.0f, 1.0f,
-                    Random.create(),
-                    0.0, 0.0, 0.0
-                )
-            )
-            ci.setReturnValue(true)
+    @Inject(method = ["close"], at = [At("HEAD")], cancellable = true)
+    private fun onClose(ci: CallbackInfo) {
+        if (ContainerScanner.hasMatch && FamilyScanner.config.blockCloseEnabled) {
             ci.cancel()
         }
     }
