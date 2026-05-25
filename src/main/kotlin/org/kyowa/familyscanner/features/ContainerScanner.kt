@@ -6,7 +6,6 @@ import net.minecraft.client.gui.screen.ingame.HandledScreen
 import net.minecraft.item.Item
 import net.minecraft.item.ItemStack
 import net.minecraft.item.tooltip.TooltipType
-import net.minecraft.text.Text
 import org.kyowa.familyscanner.FamilyScanner
 
 private val COLOR_CODE_REGEX = Regex("§[0-9a-fklmnorA-FKLMNOR]")
@@ -14,12 +13,58 @@ private val COLOR_CODE_REGEX = Regex("§[0-9a-fklmnorA-FKLMNOR]")
 object ContainerScanner {
     val matchingSlots: MutableSet<Int> = mutableSetOf()
     var hasMatch: Boolean = false
-    private var debugPrinted = false
     private val annotationCache = java.util.WeakHashMap<ItemStack, String>()
 
     private val wynntilsHandlerAndMethod: Pair<Any?, java.lang.reflect.Method>? by lazy {
         tryFindWynntilsAnnotationMethod()
     }
+
+    // ── Hardcoded watched items (name + gearType, type-safe matching) ────────────
+
+    private data class HardcodedItem(val name: String, val gearType: String)
+
+    private val HARDCODED_ITEMS: List<HardcodedItem> = listOf(
+        // Helmets
+        HardcodedItem("Anamnesis",           "HELMET"),
+        HardcodedItem("Gale's Sight",        "HELMET"),
+        HardcodedItem("Propeller Hat",       "HELMET"),
+        HardcodedItem("Xiuhtecuhtli",        "HELMET"),
+        HardcodedItem("Polyglot",            "HELMET"),
+        HardcodedItem("Brainwash",           "HELMET"),
+        HardcodedItem("Keratoconous",        "HELMET"),
+        HardcodedItem("Resolution",          "HELMET"),
+        // Chestplates
+        HardcodedItem("Soarfae",             "CHESTPLATE"),
+        HardcodedItem("Cannonade",           "CHESTPLATE"),
+        HardcodedItem("Stratosphere",        "CHESTPLATE"),
+        HardcodedItem("Libra",               "CHESTPLATE"),
+        HardcodedItem("Wanderlust",          "CHESTPLATE"),
+        HardcodedItem("Libertas",            "CHESTPLATE"),
+        HardcodedItem("Fidelius",            "CHESTPLATE"),
+        HardcodedItem("Withdrawal",          "CHESTPLATE"),
+        HardcodedItem("Drown",               "CHESTPLATE"),
+        HardcodedItem("Drenched Igneous",    "CHESTPLATE"),
+        HardcodedItem("Shogun",              "CHESTPLATE"),
+        // Leggings
+        HardcodedItem("Sagitarius",          "LEGGINGS"),
+        HardcodedItem("Aleph Null",          "LEGGINGS"),
+        HardcodedItem("Champion's Valence",  "LEGGINGS"),
+        HardcodedItem("Omniverse",           "LEGGINGS"),
+        HardcodedItem("Firewall",            "LEGGINGS"),
+        // Boots
+        HardcodedItem("Willow",              "BOOTS"),
+        HardcodedItem("Defenestration",      "BOOTS"),
+        HardcodedItem("Harbour",             "BOOTS"),
+        // Rings
+        HardcodedItem("Yang",                "RING"),
+        HardcodedItem("Simulacrum",          "RING"),
+        HardcodedItem("Old Keeper's Ring",   "RING"),
+        HardcodedItem("Dormancy",            "RING"),
+        // Necklaces
+        HardcodedItem("Smolderdew",                  "NECKLACE"),
+        HardcodedItem("Cistern Circlet",             "NECKLACE"),
+        HardcodedItem("Threshold of Consciousness",  "NECKLACE")
+    )
 
     // ── GearBox possibilities ────────────────────────────────────────────────
 
@@ -32,6 +77,8 @@ object ContainerScanner {
 
     private val gearPossibilitiesCache =
         java.util.concurrent.ConcurrentHashMap<GearBoxProps, List<String>>()
+    private val computingProps: MutableSet<GearBoxProps> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private val wynntilsGearModelPair: Pair<Any?, java.lang.reflect.Method>? by lazy {
         tryFindGearModelAllItemsMethod()
@@ -57,7 +104,6 @@ object ContainerScanner {
             } catch (_: Exception) { null }
         } ?: return null
 
-        // Accept any 0-arg method that returns Iterable/Collection/Stream/Map
         val method = modelInstance.javaClass.methods.firstOrNull { m ->
             m.parameterCount == 0 &&
             (java.lang.Iterable::class.java.isAssignableFrom(m.returnType) ||
@@ -83,7 +129,6 @@ object ContainerScanner {
         return if (!s.contains('@')) s.ifEmpty { null } else null
     }
 
-    // Handles int, Number, Optional<Number>, OptionalInt, OptionalLong
     private fun asInt(v: Any?): Int? = when (v) {
         is Int -> v
         is Number -> v.toInt()
@@ -93,7 +138,6 @@ object ContainerScanner {
         else -> null
     }
 
-    // Tries both Java record-style accessors (type()) and traditional getters (getType())
     private fun getGearTierStr(item: Any): String? {
         asString(invokeGetter(item, "tier"))?.let { return it }
         asString(invokeGetter(item, "getGearTier"))?.let { return it }
@@ -120,7 +164,6 @@ object ContainerScanner {
         val reqs = invokeGetter(item, "requirements") ?: invokeGetter(item, "getRequirements") ?: return null
         asInt(invokeGetter(reqs, "level"))?.let { return it }
         asInt(invokeGetter(reqs, "getLevel"))?.let { return it }
-        asInt(invokeGetter(reqs, "classLevel"))?.let { return it }
         return null
     }
 
@@ -149,7 +192,6 @@ object ContainerScanner {
             val rangeStr = try {
                 cls.getMethod("getLevelRange").invoke(annotation)?.toString() ?: ""
             } catch (_: Exception) { "" }
-            // e.g. "<81-85>"
             val minLevel = Regex("""<(\d+)-(\d+)>""").find(rangeStr)
                 ?.groupValues?.get(1)?.toIntOrNull() ?: maxLevel
             GearBoxProps(gearType, gearTier, minLevel, maxLevel)
@@ -173,8 +215,18 @@ object ContainerScanner {
         return rawToList(raw).mapNotNull { matchGearInfo(it, props) }.sorted()
     }
 
-    private fun getPossibleGearNames(props: GearBoxProps): List<String> =
-        gearPossibilitiesCache.getOrPut(props) { computePossibleGearNames(props) }
+    // Returns cached list immediately; starts a background thread on the first miss.
+    private fun getPossibleGearNames(props: GearBoxProps): List<String> {
+        gearPossibilitiesCache[props]?.let { return it }
+        if (computingProps.add(props)) {
+            Thread {
+                val result = computePossibleGearNames(props)
+                gearPossibilitiesCache[props] = result
+                computingProps.remove(props)
+            }.also { it.isDaemon = true }.start()
+        }
+        return emptyList()
+    }
 
     // ── Wynntils annotation helpers ──────────────────────────────────────────
 
@@ -207,7 +259,7 @@ object ContainerScanner {
         return Pair(holder, method)
     }
 
-    private fun resolveAnnotation(stack: ItemStack): Any? {
+    fun resolveAnnotation(stack: ItemStack): Any? {
         val (handler, method) = wynntilsHandlerAndMethod ?: return null
         val result = try { method.invoke(handler, stack) } catch (_: Exception) { return null }
         return when (result) {
@@ -234,7 +286,11 @@ object ContainerScanner {
                 for (getter in listOf("getName", "getDisplayName")) {
                     try {
                         val n = item.javaClass.getMethod(getter).invoke(item)
-                        if (n is String && n.isNotBlank()) { append(n.lowercase()).append(' '); named = true; break }
+                        if (n is String && n.isNotBlank()) {
+                            append(n.lowercase()).append(' ')
+                            named = true
+                            break
+                        }
                     } catch (_: Exception) {}
                 }
                 if (!named) {
@@ -266,7 +322,7 @@ object ContainerScanner {
                 }
             }
 
-            // GearBoxItem: include all possible item names from Wynntils DB
+            // Include possible item names for custom keyword search
             if (annotation.javaClass.simpleName == "GearBoxItem") {
                 val props = extractGearBoxProps(annotation)
                 if (props != null) {
@@ -281,141 +337,55 @@ object ContainerScanner {
         return text
     }
 
-    // ── Debug output ─────────────────────────────────────────────────────────
+    // ── Slot matching ───────────────────────────────────────────────────────
 
-    private fun debugSlot(
-        slot: net.minecraft.screen.slot.Slot,
+    private fun slotMatches(
         stack: ItemStack,
-        context: Item.TooltipContext,
+        keywords: Set<String>,
+        tooltipCtx: Item.TooltipContext,
         player: net.minecraft.entity.player.PlayerEntity
-    ) {
-        val name = stack.name.string.replace(COLOR_CODE_REGEX, "")
-        val tooltipStr = stack.getTooltip(context, player, TooltipType.Default.BASIC)
-            .drop(1).joinToString(" | ") { it.string.replace(COLOR_CODE_REGEX, "") }.ifEmpty { "(empty)" }
-
-        player.sendMessage(Text.literal("§e[Slot ${slot.id}] §f$name"), false)
-        player.sendMessage(Text.literal("§8  getTooltip: §7$tooltipStr"), false)
-
+    ): Boolean {
         val annotation = resolveAnnotation(stack)
-        if (annotation == null) {
-            if (wynntilsHandlerAndMethod == null) {
-                player.sendMessage(Text.literal("§c  [W] Wynntils ItemHandler not found"), false)
-            } else {
-                player.sendMessage(Text.literal("§c  [W] No annotation on this item"), false)
-            }
-            return
-        }
 
-        player.sendMessage(
-            Text.literal("§a  [W] ${annotation.javaClass.simpleName}: §7${annotation.toString().take(100)}"),
-            false
-        )
-
-        // WynnItemData contents
-        try {
-            val data = annotation.javaClass.getMethod("getData").invoke(annotation)
-            if (data != null) {
-                player.sendMessage(Text.literal("§b  [WynnItemData] ${data.javaClass.simpleName}"), false)
-                for (m in data.javaClass.methods) {
-                    if (m.parameterCount != 0 || m.declaringClass == Any::class.java) continue
-                    val v = try { m.invoke(data) } catch (_: Exception) { continue } ?: continue
-                    val display = when (v) {
-                        is Collection<*> -> v.take(5).joinToString(", ") { item ->
-                            if (item == null) "null"
-                            else {
-                                var s = item.toString()
-                                for (g in listOf("getName", "getDisplayName")) {
-                                    try { val n = item.javaClass.getMethod(g).invoke(item); if (n is String) { s = n; break } } catch (_: Exception) {}
-                                }
-                                s
-                            }
-                        }.take(120) + if (v.size > 5) " (+${v.size - 5})" else ""
-                        else -> v.toString().take(120)
-                    }
-                    player.sendMessage(Text.literal("§7    ${m.name}: §f$display"), false)
-                }
-            }
-        } catch (_: Exception) {}
-
-        // GearBoxItem: diagnose DB and show possible items
-        if (annotation.javaClass.simpleName == "GearBoxItem") {
+        // Hardcoded items: type-safe check (item name AND gear type must both match)
+        if (annotation?.javaClass?.simpleName == "GearBoxItem") {
             val props = extractGearBoxProps(annotation)
-            if (props == null) {
-                player.sendMessage(Text.literal("§c  [Possibilities] Could not read GearBox properties"), false)
-                return
-            }
-            if (wynntilsGearModelPair == null) {
-                player.sendMessage(Text.literal("§c  [Possibilities] Wynntils gear model not found"), false)
-                return
-            }
-
-            // DB diagnostic: show total size, first item class/methods/resolved values
-            try {
-                val (mi, gm) = wynntilsGearModelPair!!
-                val raw = gm.invoke(mi)
-                val allItems = rawToList(raw)
-                player.sendMessage(Text.literal("§7  [DB] ${allItems.size} total items, returnType=${gm.returnType.simpleName}"), false)
-                if (allItems.isNotEmpty()) {
-                    val fi = allItems.first()
-                    val methodNames = fi.javaClass.methods
-                        .filter { it.parameterCount == 0 && it.declaringClass != Any::class.java }
-                        .take(10).joinToString(", ") { it.name }
-                    player.sendMessage(Text.literal("§7  [DB] class=${fi.javaClass.simpleName} methods=[$methodNames]"), false)
-                    val sType = getGearTypeStr(fi) ?: "?"
-                    val sTier = getGearTierStr(fi) ?: "?"
-                    val sLv = getItemLevelInt(fi)?.toString() ?: "?"
-                    val sName = getItemNameStr(fi) ?: "?"
-                    player.sendMessage(Text.literal("§7  [DB] sample: name=§f$sName§7 type=§f$sType§7 tier=§f$sTier§7 lv=§f$sLv"), false)
-                }
-            } catch (e: Exception) {
-                player.sendMessage(Text.literal("§c  [DB] Diagnostic error: ${e.message?.take(80)}"), false)
-            }
-
-            val possibleNames = getPossibleGearNames(props)
-            if (possibleNames.isEmpty()) {
-                player.sendMessage(
-                    Text.literal("§e  [Possibilities] 0 items found for ${props.gearType} ${props.gearTier} lv${props.minLevel}-${props.maxLevel}"),
-                    false
-                )
-            } else {
-                player.sendMessage(
-                    Text.literal("§b  [Possibilities] ${possibleNames.size} items (${props.gearType} ${props.gearTier} lv${props.minLevel}-${props.maxLevel}):"),
-                    false
-                )
-                for (itemName in possibleNames.take(15)) {
-                    player.sendMessage(Text.literal("§7    - §f$itemName"), false)
-                }
-                if (possibleNames.size > 15) {
-                    player.sendMessage(
-                        Text.literal("§7    ... and §f${possibleNames.size - 15}§7 more"),
-                        false
-                    )
-                }
+            if (props != null) {
+                val possible = getPossibleGearNames(props)
+                if (HARDCODED_ITEMS.any { item ->
+                    item.gearType == props.gearType &&
+                    possible.any { p -> p.equals(item.name, ignoreCase = true) }
+                }) return true
             }
         }
+
+        // Custom keywords: text search
+        if (keywords.isEmpty()) return false
+        val vanillaTooltip = stack.getTooltip(tooltipCtx, player, TooltipType.Default.BASIC)
+            .joinToString(" ") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
+        val wynntilsText = getAnnotationText(stack)
+        val combined = "$vanillaTooltip $wynntilsText"
+        return keywords.any { kw -> combined.contains(kw) }
     }
 
     // ── Main registration ────────────────────────────────────────────────────
 
     fun register() {
-        ScreenEvents.AFTER_INIT.register { client, screen, _, _ ->
+        ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
             if (screen is HandledScreen<*>) {
-                debugPrinted = false
                 annotationCache.clear()
-                val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
-                client.player?.sendMessage(Text.literal("§8[Scanner] container: §f$title"), false)
             }
         }
 
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             val screen = client.currentScreen
             if (screen !is HandledScreen<*>) {
-                matchingSlots.clear(); hasMatch = false; debugPrinted = false; return@register
+                matchingSlots.clear(); hasMatch = false; return@register
             }
 
             val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
             if (!title.contains("Loot Chest", ignoreCase = true)) {
-                matchingSlots.clear(); hasMatch = false; debugPrinted = false; return@register
+                matchingSlots.clear(); hasMatch = false; return@register
             }
 
             val player = client.player ?: return@register
@@ -425,33 +395,12 @@ object ContainerScanner {
             val chestSlots = handler.slots.filter { it.inventory !== player.inventory }
             val tooltipCtx = Item.TooltipContext.create(world)
 
-            val hasItems = chestSlots.any { !it.stack.isEmpty }
-            if (!debugPrinted && hasItems) {
-                debugPrinted = true
-                var count = 0
-                for (slot in chestSlots) {
-                    if (count >= 3) break
-                    val stack = slot.stack
-                    if (stack.isEmpty) continue
-                    count++
-                    debugSlot(slot, stack, tooltipCtx, player)
-                }
-            }
-
             val newMatching = mutableSetOf<Int>()
-            if (keywords.isNotEmpty()) {
-                for (slot in chestSlots) {
-                    val stack = slot.stack
-                    if (stack.isEmpty) continue
-
-                    val vanillaTooltip = stack.getTooltip(tooltipCtx, player, TooltipType.Default.BASIC)
-                        .joinToString(" ") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
-                    val wynntilsText = getAnnotationText(stack)
-                    val combined = "$vanillaTooltip $wynntilsText"
-
-                    if (keywords.any { kw -> combined.contains(kw) }) {
-                        newMatching.add(slot.id)
-                    }
+            for (slot in chestSlots) {
+                val stack = slot.stack
+                if (stack.isEmpty) continue
+                if (slotMatches(stack, keywords, tooltipCtx, player)) {
+                    newMatching.add(slot.id)
                 }
             }
 
