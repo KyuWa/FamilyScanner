@@ -19,6 +19,53 @@ object ContainerScanner {
         tryFindWynntilsAnnotationMethod()
     }
 
+    // ── Hardcoded watched items (name + gearType, type-safe matching) ────────────
+
+    private data class HardcodedItem(val name: String, val gearType: String)
+
+    private val HARDCODED_ITEMS: List<HardcodedItem> = listOf(
+        // Helmets
+        HardcodedItem("Anamnesis",           "HELMET"),
+        HardcodedItem("Gale's Sight",        "HELMET"),
+        HardcodedItem("Propeller Hat",       "HELMET"),
+        HardcodedItem("Xiuhtecuhtli",        "HELMET"),
+        HardcodedItem("Polyglot",            "HELMET"),
+        HardcodedItem("Brainwash",           "HELMET"),
+        HardcodedItem("Keratoconous",        "HELMET"),
+        HardcodedItem("Resolution",          "HELMET"),
+        // Chestplates
+        HardcodedItem("Soarfae",             "CHESTPLATE"),
+        HardcodedItem("Cannonade",           "CHESTPLATE"),
+        HardcodedItem("Stratosphere",        "CHESTPLATE"),
+        HardcodedItem("Libra",               "CHESTPLATE"),
+        HardcodedItem("Wanderlust",          "CHESTPLATE"),
+        HardcodedItem("Libertas",            "CHESTPLATE"),
+        HardcodedItem("Fidelius",            "CHESTPLATE"),
+        HardcodedItem("Withdrawal",          "CHESTPLATE"),
+        HardcodedItem("Drown",               "CHESTPLATE"),
+        HardcodedItem("Drenched Igneous",    "CHESTPLATE"),
+        HardcodedItem("Shogun",              "CHESTPLATE"),
+        // Leggings
+        HardcodedItem("Sagitarius",          "LEGGINGS"),
+        HardcodedItem("Aleph Null",          "LEGGINGS"),
+        HardcodedItem("Champion's Valence",  "LEGGINGS"),
+        HardcodedItem("Omniverse",           "LEGGINGS"),
+        HardcodedItem("Firewall",            "LEGGINGS"),
+        // Boots
+        HardcodedItem("Willow",              "BOOTS"),
+        HardcodedItem("Defenestration",      "BOOTS"),
+        HardcodedItem("Harbour",             "BOOTS"),
+        // Rings
+        HardcodedItem("Yang",                "RING"),
+        HardcodedItem("Simulacrum",          "RING"),
+        HardcodedItem("Old Keeper's Ring",   "RING"),
+        HardcodedItem("Dormancy",            "RING"),
+        // Necklaces
+        HardcodedItem("Smolderdew",                  "NECKLACE"),
+        HardcodedItem("Cistern Circlet",             "NECKLACE"),
+        HardcodedItem("Threshold of Consciousness",  "NECKLACE")
+    )
+
     // ── GearBox possibilities ────────────────────────────────────────────────
 
     private data class GearBoxProps(
@@ -28,7 +75,6 @@ object ContainerScanner {
         val maxLevel: Int
     )
 
-    // Populated from a background thread; ConcurrentHashMap is safe to read from the tick thread.
     private val gearPossibilitiesCache =
         java.util.concurrent.ConcurrentHashMap<GearBoxProps, List<String>>()
     private val computingProps: MutableSet<GearBoxProps> =
@@ -169,7 +215,7 @@ object ContainerScanner {
         return rawToList(raw).mapNotNull { matchGearInfo(it, props) }.sorted()
     }
 
-    // Returns cached list immediately; starts a background thread on first miss.
+    // Returns cached list immediately; starts a background thread on the first miss.
     private fun getPossibleGearNames(props: GearBoxProps): List<String> {
         gearPossibilitiesCache[props]?.let { return it }
         if (computingProps.add(props)) {
@@ -213,7 +259,7 @@ object ContainerScanner {
         return Pair(holder, method)
     }
 
-    private fun resolveAnnotation(stack: ItemStack): Any? {
+    fun resolveAnnotation(stack: ItemStack): Any? {
         val (handler, method) = wynntilsHandlerAndMethod ?: return null
         val result = try { method.invoke(handler, stack) } catch (_: Exception) { return null }
         return when (result) {
@@ -276,6 +322,7 @@ object ContainerScanner {
                 }
             }
 
+            // Include possible item names for custom keyword search
             if (annotation.javaClass.simpleName == "GearBoxItem") {
                 val props = extractGearBoxProps(annotation)
                 if (props != null) {
@@ -288,6 +335,37 @@ object ContainerScanner {
 
         if (text.isNotEmpty()) annotationCache[stack] = text
         return text
+    }
+
+    // ── Slot matching ───────────────────────────────────────────────────────
+
+    private fun slotMatches(
+        stack: ItemStack,
+        keywords: Set<String>,
+        tooltipCtx: Item.TooltipContext,
+        player: net.minecraft.entity.player.PlayerEntity
+    ): Boolean {
+        val annotation = resolveAnnotation(stack)
+
+        // Hardcoded items: type-safe check (item name AND gear type must both match)
+        if (annotation?.javaClass?.simpleName == "GearBoxItem") {
+            val props = extractGearBoxProps(annotation)
+            if (props != null) {
+                val possible = getPossibleGearNames(props)
+                if (HARDCODED_ITEMS.any { item ->
+                    item.gearType == props.gearType &&
+                    possible.any { p -> p.equals(item.name, ignoreCase = true) }
+                }) return true
+            }
+        }
+
+        // Custom keywords: text search
+        if (keywords.isEmpty()) return false
+        val vanillaTooltip = stack.getTooltip(tooltipCtx, player, TooltipType.Default.BASIC)
+            .joinToString(" ") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
+        val wynntilsText = getAnnotationText(stack)
+        val combined = "$vanillaTooltip $wynntilsText"
+        return keywords.any { kw -> combined.contains(kw) }
     }
 
     // ── Main registration ────────────────────────────────────────────────────
@@ -313,10 +391,6 @@ object ContainerScanner {
             val player = client.player ?: return@register
             val world = client.world ?: return@register
             val keywords = FamilyScanner.config.keywords
-            if (keywords.isEmpty()) {
-                matchingSlots.clear(); hasMatch = false; return@register
-            }
-
             val handler = screen.screenHandler
             val chestSlots = handler.slots.filter { it.inventory !== player.inventory }
             val tooltipCtx = Item.TooltipContext.create(world)
@@ -325,13 +399,7 @@ object ContainerScanner {
             for (slot in chestSlots) {
                 val stack = slot.stack
                 if (stack.isEmpty) continue
-
-                val vanillaTooltip = stack.getTooltip(tooltipCtx, player, TooltipType.Default.BASIC)
-                    .joinToString(" ") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
-                val wynntilsText = getAnnotationText(stack)
-                val combined = "$vanillaTooltip $wynntilsText"
-
-                if (keywords.any { kw -> combined.contains(kw) }) {
+                if (slotMatches(stack, keywords, tooltipCtx, player)) {
                     newMatching.add(slot.id)
                 }
             }

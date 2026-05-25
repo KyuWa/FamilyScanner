@@ -47,7 +47,7 @@ object ScannerCommand {
                         .executes { ctx ->
                             val keywords = FamilyScanner.config.keywords
                             if (keywords.isEmpty()) {
-                                ctx.source.sendFeedback(Text.literal("No keywords configured."))
+                                ctx.source.sendFeedback(Text.literal("No custom keywords configured."))
                             } else {
                                 ctx.source.sendFeedback(Text.literal("Keywords: ${keywords.joinToString(", ")}"))
                             }
@@ -59,7 +59,33 @@ object ScannerCommand {
                         .executes { ctx ->
                             FamilyScanner.config.keywords.clear()
                             FamilyScanner.config.save()
-                            ctx.source.sendFeedback(Text.literal("All keywords cleared."))
+                            ctx.source.sendFeedback(Text.literal("All custom keywords cleared."))
+                            1
+                        }
+                )
+                .then(
+                    literal("blockclose")
+                        .then(
+                            literal("enable")
+                                .executes { ctx ->
+                                    FamilyScanner.config.blockCloseEnabled = true
+                                    FamilyScanner.config.save()
+                                    ctx.source.sendFeedback(Text.literal("Block-close enabled. Press Ctrl+Esc to bypass."))
+                                    1
+                                }
+                        )
+                        .then(
+                            literal("disable")
+                                .executes { ctx ->
+                                    FamilyScanner.config.blockCloseEnabled = false
+                                    FamilyScanner.config.save()
+                                    ctx.source.sendFeedback(Text.literal("Block-close disabled."))
+                                    1
+                                }
+                        )
+                        .executes { ctx ->
+                            val state = if (FamilyScanner.config.blockCloseEnabled) "§aenabled" else "§cdisabled"
+                            ctx.source.sendFeedback(Text.literal("Block-close is currently $state§r. Use enable/disable to change."))
                             1
                         }
                 )
