@@ -8,7 +8,6 @@ import net.minecraft.text.Text
 import org.kyowa.familyscanner.FamilyScanner
 
 private val COLOR_CODE_REGEX = Regex("§[0-9a-fklmnorA-FKLMNOR]")
-private val LOOT_CHEST_PATTERN = Regex("Loot Chest .\\[.+\\]")
 
 object ContainerScanner {
     val matchingSlots: MutableSet<Int> = mutableSetOf()
@@ -37,7 +36,7 @@ object ContainerScanner {
             }
 
             val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
-            if (!LOOT_CHEST_PATTERN.containsMatchIn(title)) {
+            if (!title.contains("Loot Chest", ignoreCase = true)) {
                 matchingSlots.clear()
                 hasMatch = false
                 lastDebugTitle = null
@@ -48,10 +47,10 @@ object ContainerScanner {
             val keywords = FamilyScanner.config.keywords
             val handler = screen.screenHandler
 
-            // Only consider chest slots, not player inventory slots
+            // Only chest slots, not player inventory
             val chestSlots = handler.slots.filter { it.inventory !== player.inventory }
 
-            // Debug: print first 5 chest slots once per chest open
+            // Debug: print first 5 non-empty chest slots once per chest open
             if (lastDebugTitle != title) {
                 lastDebugTitle = title
                 var debugCount = 0
@@ -60,7 +59,7 @@ object ContainerScanner {
                     val stack = slot.stack
                     if (stack.isEmpty) continue
                     val name = stack.name.string.replace(COLOR_CODE_REGEX, "")
-                    val lore = slot.stack.get(DataComponentTypes.LORE)?.lines
+                    val lore = stack.get(DataComponentTypes.LORE)?.lines
                         ?.joinToString(" §8|§f ") { it.string.replace(COLOR_CODE_REGEX, "") }
                         ?: "§7(no lore)"
                     player.sendMessage(
