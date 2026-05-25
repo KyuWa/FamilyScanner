@@ -3,7 +3,8 @@ package org.kyowa.familyscanner.features
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.component.DataComponentTypes
+import net.minecraft.item.Item
+import net.minecraft.item.tooltip.TooltipType
 import net.minecraft.text.Text
 import org.kyowa.familyscanner.FamilyScanner
 
@@ -44,13 +45,11 @@ object ContainerScanner {
             }
 
             val player = client.player ?: return@register
+            val world = client.world ?: return@register
             val keywords = FamilyScanner.config.keywords
             val handler = screen.screenHandler
-
-            // Only chest slots, not player inventory
             val chestSlots = handler.slots.filter { it.inventory !== player.inventory }
 
-            // Debug: print first 5 non-empty chest slots once per chest open
             if (lastDebugTitle != title) {
                 lastDebugTitle = title
                 var debugCount = 0
@@ -58,12 +57,16 @@ object ContainerScanner {
                     if (debugCount >= 5) break
                     val stack = slot.stack
                     if (stack.isEmpty) continue
-                    val name = stack.name.string.replace(COLOR_CODE_REGEX, "")
-                    val lore = stack.get(DataComponentTypes.LORE)?.lines
-                        ?.joinToString(" §8|§f ") { it.string.replace(COLOR_CODE_REGEX, "") }
-                        ?: "§7(no lore)"
+                    val tooltipLines = stack.getTooltip(
+                        Item.TooltipContext.create(world),
+                        player,
+                        TooltipType.Default.BASIC
+                    )
+                    val tooltipText = tooltipLines.joinToString(" §8|§f ") {
+                        it.string.replace(COLOR_CODE_REGEX, "")
+                    }
                     player.sendMessage(
-                        Text.literal("§8[Slot ${slot.id}] §f$name §8>> §f$lore"),
+                        Text.literal("§8[Slot ${slot.id}] §f$tooltipText"),
                         false
                     )
                     debugCount++
@@ -76,14 +79,15 @@ object ContainerScanner {
                 for (slot in chestSlots) {
                     val stack = slot.stack
                     if (stack.isEmpty) continue
-
-                    val name = stack.name.string.replace(COLOR_CODE_REGEX, "").lowercase()
-                    val loreText = stack.get(DataComponentTypes.LORE)?.lines
-                        ?.joinToString("\n") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
-                        ?: ""
-                    val fullText = "$name\n$loreText"
-
-                    if (keywords.any { keyword -> fullText.contains(keyword) }) {
+                    val tooltipLines = stack.getTooltip(
+                        Item.TooltipContext.create(world),
+                        player,
+                        TooltipType.Default.BASIC
+                    )
+                    val tooltipText = tooltipLines.joinToString("\n") {
+                        it.string.replace(COLOR_CODE_REGEX, "").lowercase()
+                    }
+                    if (keywords.any { keyword -> tooltipText.contains(keyword) }) {
                         newMatching.add(slot.id)
                     }
                 }
