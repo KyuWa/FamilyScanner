@@ -3,7 +3,7 @@ package org.kyowa.familyscanner.mixin
 import net.minecraft.client.MinecraftClient
 import net.minecraft.client.gui.DrawContext
 import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.client.sound.PositionedSoundInstance
+import net.minecraft.client.sound.SimpleSoundInstance
 import net.minecraft.screen.ScreenHandler
 import net.minecraft.sound.SoundEvents
 import org.lwjgl.glfw.GLFW
@@ -33,7 +33,7 @@ abstract class HandledScreenMixin<T : ScreenHandler> {
         val ctrlHeld = (modifiers and GLFW.GLFW_MOD_CONTROL) != 0
         if (!ctrlHeld) {
             MinecraftClient.getInstance().soundManager.play(
-                PositionedSoundInstance.master(SoundEvents.BLOCK_ANVIL_BREAK, 1.0f)
+                SimpleSoundInstance.forUi(SoundEvents.BLOCK_ANVIL_BREAK, 1.0f)
             )
             ci.setReturnValue(true)
             ci.cancel()
