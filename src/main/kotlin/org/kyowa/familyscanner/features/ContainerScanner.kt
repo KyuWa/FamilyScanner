@@ -4,7 +4,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.client.gui.screen.ingame.HandledScreen
 import net.minecraft.item.Item
 import net.minecraft.item.tooltip.TooltipType
-import net.minecraft.sound.SoundEvents
+import net.minecraft.text.TranslatableTextContent
 import org.kyowa.familyscanner.FamilyScanner
 
 object ContainerScanner {
@@ -15,6 +15,14 @@ object ContainerScanner {
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             val screen = client.currentScreen
             if (screen !is HandledScreen<*>) {
+                matchingSlots.clear()
+                hasMatch = false
+                return@register
+            }
+
+            val titleContent = screen.title.content
+            if (titleContent !is TranslatableTextContent ||
+                (titleContent.key != "container.chest" && titleContent.key != "container.chestDouble")) {
                 matchingSlots.clear()
                 hasMatch = false
                 return@register
@@ -50,14 +58,9 @@ object ContainerScanner {
                 }
             }
 
-            val previousMatch = hasMatch
             matchingSlots.clear()
             matchingSlots.addAll(newMatching)
             hasMatch = newMatching.isNotEmpty()
-
-            if (hasMatch && !previousMatch) {
-                player.playSound(SoundEvents.ENTITY_ITEM_BREAK.value(), 1.0f, 1.0f)
-            }
         }
     }
 }

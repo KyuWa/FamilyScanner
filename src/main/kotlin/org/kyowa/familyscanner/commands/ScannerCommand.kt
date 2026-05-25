@@ -15,7 +15,7 @@ object ScannerCommand {
                 .then(
                     literal("add")
                         .then(
-                            argument("keyword", StringArgumentType.word())
+                            argument("keyword", StringArgumentType.greedyString())
                                 .executes { ctx ->
                                     val keyword = StringArgumentType.getString(ctx, "keyword").lowercase()
                                     FamilyScanner.config.keywords.add(keyword)
@@ -28,7 +28,7 @@ object ScannerCommand {
                 .then(
                     literal("remove")
                         .then(
-                            argument("keyword", StringArgumentType.word())
+                            argument("keyword", StringArgumentType.greedyString())
                                 .executes { ctx ->
                                     val keyword = StringArgumentType.getString(ctx, "keyword").lowercase()
                                     val removed = FamilyScanner.config.keywords.remove(keyword)
