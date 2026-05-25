@@ -1,27 +1,26 @@
 plugins {
-    id("fabric-loom") version "1.13-SNAPSHOT"
     kotlin("jvm") version "2.3.20"
+    id("fabric-loom") version "1.13-SNAPSHOT"
 }
 
-version = project.property("mod_version") as String
-group = project.property("maven_group") as String
+version = "1.0.0"
+group = "org.kyowa"
 
 base {
-    archivesName.set(project.property("archives_base_name") as String)
+    archivesName = "familyscanner"
 }
-
-val targetJavaVersion = 21
 
 repositories {
     mavenCentral()
+    maven("https://maven.fabricmc.net/")
 }
 
 dependencies {
-    minecraft("com.mojang:minecraft:${project.property("minecraft_version")}")
-    mappings("net.fabricmc:yarn:${project.property("yarn_mappings")}:v2")
-    modImplementation("net.fabricmc:fabric-loader:${project.property("loader_version")}")
-    modImplementation("net.fabricmc.fabric-api:fabric-api:${project.property("fabric_version")}")
-    modImplementation("net.fabricmc:fabric-language-kotlin:${project.property("kotlin_loader_version")}")
+    minecraft("com.mojang:minecraft:1.21.1")
+    mappings("net.fabricmc:yarn:1.21.1+build.3:v2")
+    modImplementation("net.fabricmc:fabric-loader:0.16.9")
+    modImplementation("net.fabricmc.fabric-api:fabric-api:0.141.2+1.21.11")
+    modImplementation("net.fabricmc:fabric-language-kotlin:1.13.10+kotlin.2.3.20")
 }
 
 tasks.processResources {
@@ -31,21 +30,15 @@ tasks.processResources {
     }
 }
 
-tasks.withType<JavaCompile>().configureEach {
-    options.release = targetJavaVersion
-}
-
-kotlin {
-    jvmToolchain(targetJavaVersion)
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+    compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
-tasks.jar {
-    from("LICENSE") {
-        rename { "${it}_${project.base.archivesName.get()}" }
-    }
+tasks.remapJar {
+    archiveVersion = "1.21.1"
 }
