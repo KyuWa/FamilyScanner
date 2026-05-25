@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "familyscanner",
+  "version": "${version}",
+  "name": "FamilyScanner",
+  "description": "Scans open containers for items matching watched keywords.",
+  "authors": [],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      {
+        "adapter": "kotlin",
+        "value": "org.kyowa.familyscanner.FamilyScanner"
+      }
+    ]
+  },
+  "mixins": [
+    "familyscanner.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-language-kotlin": ">=1.13.10+kotlin.2.3.20"
+  }
+}
