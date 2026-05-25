@@ -40,7 +40,7 @@ object ContainerScanner {
                 val tooltipLines = stack.getTooltip(
                     Item.TooltipContext.create(world),
                     player,
-                    TooltipType.Default.NORMAL
+                    TooltipType.Default.BASIC
                 )
 
                 val tooltipText = tooltipLines.joinToString("\n") { it.string.lowercase() }
@@ -56,7 +56,7 @@ object ContainerScanner {
             hasMatch = newMatching.isNotEmpty()
 
             if (hasMatch && !previousMatch) {
-                player.playSound(SoundEvents.ENTITY_ITEM_BREAK, 1.0f, 1.0f)
+                player.playSound(SoundEvents.ENTITY_ITEM_BREAK.value(), 1.0f, 1.0f)
             }
         }
     }

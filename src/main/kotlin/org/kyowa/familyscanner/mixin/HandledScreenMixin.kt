@@ -1,9 +1,10 @@
 package org.kyowa.familyscanner.mixin
 
+import net.minecraft.client.MinecraftClient
 import net.minecraft.client.gui.DrawContext
-import net.minecraft.client.gui.screen.Screen
 import net.minecraft.client.gui.screen.ingame.HandledScreen
 import net.minecraft.screen.ScreenHandler
+import org.lwjgl.glfw.GLFW
 import org.spongepowered.asm.mixin.Mixin
 import org.spongepowered.asm.mixin.injection.At
 import org.spongepowered.asm.mixin.injection.Inject
@@ -15,9 +16,15 @@ abstract class HandledScreenMixin<T : ScreenHandler> {
 
     @Inject(method = ["close"], at = [At("HEAD")], cancellable = true)
     private fun onClose(ci: CallbackInfo) {
-        if (ContainerScanner.hasMatch && !Screen.hasControlDown()) {
+        if (ContainerScanner.hasMatch && !isCtrlHeld()) {
             ci.cancel()
         }
+    }
+
+    private fun isCtrlHeld(): Boolean {
+        val handle = MinecraftClient.getInstance().window.handle
+        return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS ||
+               GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS
     }
 
     @Inject(method = ["render"], at = [At("TAIL")])
