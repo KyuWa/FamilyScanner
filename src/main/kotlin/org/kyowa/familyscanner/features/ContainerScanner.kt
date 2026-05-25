@@ -8,6 +8,7 @@ import net.minecraft.text.Text
 import org.kyowa.familyscanner.FamilyScanner
 
 private val COLOR_CODE_REGEX = Regex("§[0-9a-fklmnorA-FKLMNOR]")
+private val LOOT_CHEST_PATTERN = Regex("Loot Chest .\\[.+\\]")
 
 object ContainerScanner {
     val matchingSlots: MutableSet<Int> = mutableSetOf()
@@ -36,7 +37,7 @@ object ContainerScanner {
             }
 
             val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
-            if (!title.contains("Loot Chest", ignoreCase = true)) {
+            if (!LOOT_CHEST_PATTERN.containsMatchIn(title)) {
                 matchingSlots.clear()
                 hasMatch = false
                 lastDebugTitle = null
@@ -45,20 +46,21 @@ object ContainerScanner {
 
             val player = client.player ?: return@register
             val keywords = FamilyScanner.config.keywords
-
             val handler = screen.screenHandler
-            val newMatching = mutableSetOf<Int>()
 
-            // Print lore debug once per chest open
+            // Only consider chest slots, not player inventory slots
+            val chestSlots = handler.slots.filter { it.inventory !== player.inventory }
+
+            // Debug: print first 5 chest slots once per chest open
             if (lastDebugTitle != title) {
                 lastDebugTitle = title
                 var debugCount = 0
-                for (slot in handler.slots) {
+                for (slot in chestSlots) {
                     if (debugCount >= 5) break
                     val stack = slot.stack
                     if (stack.isEmpty) continue
                     val name = stack.name.string.replace(COLOR_CODE_REGEX, "")
-                    val lore = stack.get(DataComponentTypes.LORE)?.lines
+                    val lore = slot.stack.get(DataComponentTypes.LORE)?.lines
                         ?.joinToString(" §8|§f ") { it.string.replace(COLOR_CODE_REGEX, "") }
                         ?: "§7(no lore)"
                     player.sendMessage(
@@ -69,24 +71,22 @@ object ContainerScanner {
                 }
             }
 
-            if (keywords.isEmpty()) {
-                matchingSlots.clear()
-                hasMatch = false
-                return@register
-            }
+            val newMatching = mutableSetOf<Int>()
 
-            for (slot in handler.slots) {
-                val stack = slot.stack
-                if (stack.isEmpty) continue
+            if (keywords.isNotEmpty()) {
+                for (slot in chestSlots) {
+                    val stack = slot.stack
+                    if (stack.isEmpty) continue
 
-                val name = stack.name.string.replace(COLOR_CODE_REGEX, "").lowercase()
-                val loreText = stack.get(DataComponentTypes.LORE)?.lines
-                    ?.joinToString("\n") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
-                    ?: ""
-                val fullText = "$name\n$loreText"
+                    val name = stack.name.string.replace(COLOR_CODE_REGEX, "").lowercase()
+                    val loreText = stack.get(DataComponentTypes.LORE)?.lines
+                        ?.joinToString("\n") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
+                        ?: ""
+                    val fullText = "$name\n$loreText"
 
-                if (keywords.any { keyword -> fullText.contains(keyword) }) {
-                    newMatching.add(slot.id)
+                    if (keywords.any { keyword -> fullText.contains(keyword) }) {
+                        newMatching.add(slot.id)
+                    }
                 }
             }
 
