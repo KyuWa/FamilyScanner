@@ -1,9 +1,11 @@
 package org.kyowa.familyscanner.features
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.client.gui.screen.ingame.HandledScreen
 import net.minecraft.item.Item
 import net.minecraft.item.tooltip.TooltipType
+import net.minecraft.text.Text
 import org.kyowa.familyscanner.FamilyScanner
 
 private val COLOR_CODE_REGEX = Regex("§[0-9a-fklmnorA-FKLMNOR]")
@@ -13,6 +15,17 @@ object ContainerScanner {
     var hasMatch: Boolean = false
 
     fun register() {
+        ScreenEvents.AFTER_INIT.register { client, screen, _, _ ->
+            if (screen is HandledScreen<*>) {
+                val raw = screen.title.string
+                val stripped = raw.replace(COLOR_CODE_REGEX, "")
+                client.player?.sendMessage(
+                    Text.literal("§8[Scanner Debug] raw='§f$raw§8' stripped='§f$stripped§8'"),
+                    false
+                )
+            }
+        }
+
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             val screen = client.currentScreen
             if (screen !is HandledScreen<*>) {
