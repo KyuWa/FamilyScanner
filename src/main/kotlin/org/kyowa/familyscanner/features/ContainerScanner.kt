@@ -18,29 +18,23 @@ object ContainerScanner {
     private var debugPrinted = false
     private val annotationCache = java.util.WeakHashMap<ItemStack, String>()
 
-    // Lazy-find the Wynntils ItemHandler instance and annotation method once
     private val wynntilsHandlerAndMethod: Pair<Any?, java.lang.reflect.Method>? by lazy {
         tryFindWynntilsAnnotationMethod()
     }
 
     private fun tryFindWynntilsAnnotationMethod(): Pair<Any?, java.lang.reflect.Method>? {
-        // Try to load the ItemHandler class
         val handlerClass = try {
             Class.forName("com.wynntils.handlers.item.ItemHandler")
-        } catch (_: ClassNotFoundException) { return null } catch (_: Exception) { return null }
+        } catch (_: Exception) { return null }
 
-        // Find method named like getItemStackAnnotation with 1 param
         val method = handlerClass.methods.firstOrNull { m ->
-            m.parameterCount == 1 &&
-            (m.name.lowercase().contains("annotation"))
+            m.parameterCount == 1 && m.name.lowercase().contains("annotation")
         } ?: return null
 
-        // If static, receiver is null
         if (java.lang.reflect.Modifier.isStatic(method.modifiers)) {
             return Pair(null, method)
         }
 
-        // Instance method — find the handler via Handlers or Managers holder class
         val holder = listOf(
             "com.wynntils.core.components.Handlers",
             "com.wynntils.core.components.Managers",
@@ -57,46 +51,69 @@ object ContainerScanner {
         return Pair(holder, method)
     }
 
-    private fun getAnnotationText(stack: ItemStack): String {
-        annotationCache[stack]?.let { return it }
-
-        val (handler, method) = wynntilsHandlerAndMethod ?: return ""
-        val result = try {
-            method.invoke(handler, stack)
-        } catch (_: Exception) { return "" }
-
-        val annotation = when (result) {
+    private fun resolveAnnotation(stack: ItemStack): Any? {
+        val (handler, method) = wynntilsHandlerAndMethod ?: return null
+        val result = try { method.invoke(handler, stack) } catch (_: Exception) { return null }
+        return when (result) {
             is java.util.Optional<*> -> result.orElse(null)
             else -> result
-        } ?: return ""
+        }
+    }
+
+    // Collect searchable text from an arbitrary object (one level deep).
+    private fun collectText(obj: Any): String = buildString {
+        for (m in obj.javaClass.methods) {
+            if (m.parameterCount != 0 || m.declaringClass == Any::class.java) continue
+            val v = try { m.invoke(obj) } catch (_: Exception) { continue } ?: continue
+            appendValue(v)
+        }
+    }
+
+    private fun StringBuilder.appendValue(v: Any) {
+        when (v) {
+            is String -> if (v.isNotBlank()) append(v.lowercase()).append(' ')
+            is Collection<*> -> for (item in v) {
+                if (item == null) continue
+                if (item is String) { append(item.lowercase()).append(' '); continue }
+                // try getName first, fall back to toString if no memory address
+                var named = false
+                for (getter in listOf("getName", "getDisplayName")) {
+                    try {
+                        val n = item.javaClass.getMethod(getter).invoke(item)
+                        if (n is String && n.isNotBlank()) { append(n.lowercase()).append(' '); named = true; break }
+                    } catch (_: Exception) {}
+                }
+                if (!named) {
+                    val s = item.toString()
+                    if (!s.contains('@')) append(s.lowercase()).append(' ')
+                }
+            }
+            else -> {
+                val s = v.toString()
+                // skip memory-address strings and huge blobs
+                if (!s.contains('@') && s.length < 200) append(s.lowercase()).append(' ')
+            }
+        }
+    }
+
+    private fun getAnnotationText(stack: ItemStack): String {
+        annotationCache[stack]?.let { return it }
+        val annotation = resolveAnnotation(stack) ?: return ""
 
         val text = buildString {
+            // annotation.toString() already contains type/tier/range for GearBoxItem
+            val top = annotation.toString()
+            if (!top.contains('@')) append(top.lowercase()).append(' ')
+
+            // also mine the annotation's own getters for strings/collections
             for (m in annotation.javaClass.methods) {
-                if (m.parameterCount != 0) continue
-                try {
-                    val v = m.invoke(annotation) ?: continue
-                    when (v) {
-                        is String -> if (v.isNotBlank()) append(v.lowercase()).append(" ")
-                        is Collection<*> -> for (item in v) {
-                            when (item) {
-                                is String -> append(item.lowercase()).append(" ")
-                                null -> {}
-                                else -> {
-                                    for (getter in listOf("getName", "name", "getDisplayName")) {
-                                        try {
-                                            val n = item.javaClass.getMethod(getter).invoke(item)
-                                            if (n is String && n.isNotBlank()) {
-                                                append(n.lowercase()).append(" ")
-                                                break
-                                            }
-                                        } catch (_: Exception) {}
-                                    }
-                                }
-                            }
-                        }
-                        else -> {}
-                    }
-                } catch (_: Exception) {}
+                if (m.parameterCount != 0 || m.declaringClass == Any::class.java) continue
+                val v = try { m.invoke(annotation) } catch (_: Exception) { continue } ?: continue
+                appendValue(v)
+                // one level deep: if the value is a non-trivial object, explore it too
+                if (v !is String && v !is Collection<*> && v !is Enum<*> && v !is Number && v !is Boolean) {
+                    append(collectText(v))
+                }
             }
         }.trim()
 
@@ -111,62 +128,50 @@ object ContainerScanner {
         player: net.minecraft.entity.player.PlayerEntity
     ) {
         val name = stack.name.string.replace(COLOR_CODE_REGEX, "")
-        val tooltipLines = stack.getTooltip(context, player, TooltipType.Default.BASIC)
-        val tooltipStr = tooltipLines.drop(1)
-            .joinToString(" | ") { it.string.replace(COLOR_CODE_REGEX, "") }
-            .ifEmpty { "(empty)" }
-
-        val nbt = stack.get(DataComponentTypes.CUSTOM_DATA)?.copyNbt()?.toString() ?: "(none)"
-        val componentList = stack.components.types
-            .joinToString(",") { it.toString().substringAfterLast('.') }
+        val tooltipStr = stack.getTooltip(context, player, TooltipType.Default.BASIC)
+            .drop(1).joinToString(" | ") { it.string.replace(COLOR_CODE_REGEX, "") }.ifEmpty { "(empty)" }
 
         player.sendMessage(Text.literal("§e[Slot ${slot.id}] §f$name"), false)
-        player.sendMessage(Text.literal("§8  components: §7$componentList"), false)
         player.sendMessage(Text.literal("§8  getTooltip: §7$tooltipStr"), false)
-        player.sendMessage(Text.literal("§8  customNbt: §7${nbt.take(200)}"), false)
 
-        // Wynntils annotation debug
-        val (handler, method) = wynntilsHandlerAndMethod ?: run {
-            player.sendMessage(Text.literal("§c  [W] Wynntils ItemHandler not found"), false)
-            return
-        }
-        try {
-            val result = method.invoke(handler, stack)
-            val annotation = when (result) {
-                is java.util.Optional<*> -> result.orElse(null)
-                else -> result
-            }
-            if (annotation == null) {
-                player.sendMessage(Text.literal("§c  [W] No annotation on this item"), false)
+        val annotation = resolveAnnotation(stack)
+        if (annotation == null) {
+            val (_, _) = wynntilsHandlerAndMethod ?: run {
+                player.sendMessage(Text.literal("§c  [W] Wynntils ItemHandler not found"), false)
                 return
             }
-            player.sendMessage(Text.literal("§a  [W] ${annotation.javaClass.simpleName}"), false)
-            for (m in annotation.javaClass.methods) {
-                if (m.parameterCount != 0) continue
-                try {
-                    val v = m.invoke(annotation) ?: continue
+            player.sendMessage(Text.literal("§c  [W] No annotation on this item"), false)
+            return
+        }
+
+        player.sendMessage(Text.literal("§a  [W] ${annotation.javaClass.simpleName}: §7${annotation.toString().take(100)}"), false)
+
+        // Show WynnItemData contents
+        try {
+            val dataMethod = annotation.javaClass.getMethod("getData")
+            val data = dataMethod.invoke(annotation)
+            if (data != null) {
+                player.sendMessage(Text.literal("§b  [WynnItemData] ${data.javaClass.simpleName}"), false)
+                for (m in data.javaClass.methods) {
+                    if (m.parameterCount != 0 || m.declaringClass == Any::class.java) continue
+                    val v = try { m.invoke(data) } catch (_: Exception) { continue } ?: continue
                     val display = when (v) {
-                        is Collection<*> -> v.joinToString(", ") { item ->
-                            if (item is String) item
+                        is Collection<*> -> v.take(5).joinToString(", ") { item ->
+                            if (item == null) "null"
                             else {
-                                var itemName = item?.toString() ?: "null"
-                                for (getter in listOf("getName", "getDisplayName")) {
-                                    try {
-                                        val n = item?.javaClass?.getMethod(getter)?.invoke(item)
-                                        if (n is String) { itemName = n; break }
-                                    } catch (_: Exception) {}
+                                var s = item.toString()
+                                for (g in listOf("getName", "getDisplayName")) {
+                                    try { val n = item.javaClass.getMethod(g).invoke(item); if (n is String) { s = n; break } } catch (_: Exception) {}
                                 }
-                                itemName
+                                s
                             }
-                        }.take(120)
+                        }.take(120) + if (v.size > 5) " (+${v.size - 5})" else ""
                         else -> v.toString().take(120)
                     }
                     player.sendMessage(Text.literal("§7    ${m.name}: §f$display"), false)
-                } catch (_: Exception) {}
+                }
             }
-        } catch (e: Exception) {
-            player.sendMessage(Text.literal("§c  [W] Error: ${e.message?.take(80)}"), false)
-        }
+        } catch (_: Exception) {}
     }
 
     fun register() {
@@ -175,28 +180,19 @@ object ContainerScanner {
                 debugPrinted = false
                 annotationCache.clear()
                 val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
-                client.player?.sendMessage(
-                    Text.literal("§8[Scanner] container: §f$title"),
-                    false
-                )
+                client.player?.sendMessage(Text.literal("§8[Scanner] container: §f$title"), false)
             }
         }
 
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             val screen = client.currentScreen
             if (screen !is HandledScreen<*>) {
-                matchingSlots.clear()
-                hasMatch = false
-                debugPrinted = false
-                return@register
+                matchingSlots.clear(); hasMatch = false; debugPrinted = false; return@register
             }
 
             val title = screen.title.string.replace(COLOR_CODE_REGEX, "")
             if (!title.contains("Loot Chest", ignoreCase = true)) {
-                matchingSlots.clear()
-                hasMatch = false
-                debugPrinted = false
-                return@register
+                matchingSlots.clear(); hasMatch = false; debugPrinted = false; return@register
             }
 
             val player = client.player ?: return@register
@@ -226,7 +222,7 @@ object ContainerScanner {
                     if (stack.isEmpty) continue
 
                     val vanillaTooltip = stack.getTooltip(tooltipCtx, player, TooltipType.Default.BASIC)
-                        .joinToString("\n") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
+                        .joinToString(" ") { it.string.replace(COLOR_CODE_REGEX, "").lowercase() }
                     val wynntilsText = getAnnotationText(stack)
                     val combined = "$vanillaTooltip $wynntilsText"
 
