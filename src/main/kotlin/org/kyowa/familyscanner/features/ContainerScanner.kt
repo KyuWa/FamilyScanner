@@ -3,7 +3,6 @@ package org.kyowa.familyscanner.features
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.client.gui.screen.ingame.HandledScreen
-import net.minecraft.component.DataComponentTypes
 import net.minecraft.item.Item
 import net.minecraft.item.ItemStack
 import net.minecraft.item.tooltip.TooltipType
@@ -21,6 +20,154 @@ object ContainerScanner {
     private val wynntilsHandlerAndMethod: Pair<Any?, java.lang.reflect.Method>? by lazy {
         tryFindWynntilsAnnotationMethod()
     }
+
+    // ── GearBox possibilities ────────────────────────────────────────────────
+    private data class GearBoxProps(
+        val gearType: String,
+        val gearTier: String,
+        val minLevel: Int,
+        val maxLevel: Int
+    )
+
+    private val gearPossibilitiesCache =
+        java.util.concurrent.ConcurrentHashMap<GearBoxProps, List<String>>()
+
+    private val wynntilsGearModelPair: Pair<Any?, java.lang.reflect.Method>? by lazy {
+        tryFindGearModelAllItemsMethod()
+    }
+
+    private fun tryFindGearModelAllItemsMethod(): Pair<Any?, java.lang.reflect.Method>? {
+        val modelsClass = try {
+            Class.forName("com.wynntils.core.components.Models")
+        } catch (_: Exception) { return null }
+
+        // Try well-known field names first, then fall back to scanning
+        val modelInstance: Any = listOf("Gear", "GearItem", "Item", "WynnItem").firstNotNullOfOrNull { name ->
+            try { modelsClass.getField(name).get(null) } catch (_: Exception) { null }
+        } ?: modelsClass.fields.firstNotNullOfOrNull { field ->
+            try {
+                val inst = field.get(null) ?: return@firstNotNullOfOrNull null
+                val hasGearListMethod = inst.javaClass.methods.any { m ->
+                    m.parameterCount == 0 &&
+                    m.name.lowercase().let { n -> n.contains("gear") && (n.contains("all") || n.contains("info") || n.contains("list")) }
+                }
+                if (hasGearListMethod) inst else null
+            } catch (_: Exception) { null }
+        } ?: return null
+
+        val method = modelInstance.javaClass.methods.firstOrNull { m ->
+            m.parameterCount == 0 &&
+            (java.lang.Iterable::class.java.isAssignableFrom(m.returnType) ||
+             java.util.Collection::class.java.isAssignableFrom(m.returnType) ||
+             java.util.stream.Stream::class.java.isAssignableFrom(m.returnType)) &&
+            m.name.lowercase().let { n ->
+                (n.contains("all") || n.contains("gear") || n.contains("info") || n.contains("item")) &&
+                !n.contains("set") && !n.contains("add")
+            }
+        } ?: return null
+
+        return Pair(modelInstance, method)
+    }
+
+    private fun invokeGetter(obj: Any, name: String): Any? =
+        try { obj.javaClass.getMethod(name).invoke(obj) } catch (_: Exception) { null }
+
+    private fun asString(v: Any?): String? {
+        v ?: return null
+        if (v is String) return v.ifEmpty { null }
+        val s = v.toString()
+        return if (!s.contains('@')) s.ifEmpty { null } else null
+    }
+
+    private fun asInt(v: Any?): Int? = when (v) {
+        is Int -> v
+        is Number -> v.toInt()
+        is java.util.Optional<*> -> (v.orElse(null) as? Number)?.toInt()
+        else -> null
+    }
+
+    private fun getGearTierStr(item: Any): String? {
+        asString(invokeGetter(item, "getGearTier"))?.let { return it }
+        asString(invokeGetter(item, "getTier"))?.let { return it }
+        val meta = invokeGetter(item, "metaInfo") ?: invokeGetter(item, "getMetaInfo") ?: return null
+        asString(invokeGetter(meta, "tier"))?.let { return it }
+        asString(invokeGetter(meta, "getTier"))?.let { return it }
+        return null
+    }
+
+    private fun getGearTypeStr(item: Any): String? {
+        asString(invokeGetter(item, "getGearType"))?.let { return it }
+        asString(invokeGetter(item, "getType"))?.let { return it }
+        val meta = invokeGetter(item, "metaInfo") ?: invokeGetter(item, "getMetaInfo") ?: return null
+        asString(invokeGetter(meta, "type"))?.let { return it }
+        asString(invokeGetter(meta, "getType"))?.let { return it }
+        return null
+    }
+
+    private fun getItemLevelInt(item: Any): Int? {
+        asInt(invokeGetter(item, "getLevel"))?.let { return it }
+        asInt(invokeGetter(item, "level"))?.let { return it }
+        val reqs = invokeGetter(item, "requirements") ?: invokeGetter(item, "getRequirements") ?: return null
+        asInt(invokeGetter(reqs, "level"))?.let { return it }
+        asInt(invokeGetter(reqs, "getLevel"))?.let { return it }
+        asInt(invokeGetter(reqs, "classLevel"))?.let { return it }
+        return null
+    }
+
+    private fun getItemNameStr(item: Any): String? {
+        asString(invokeGetter(item, "name"))?.let { return it }
+        asString(invokeGetter(item, "getName"))?.let { return it }
+        asString(invokeGetter(item, "getDisplayName"))?.let { return it }
+        return null
+    }
+
+    private fun extractGearBoxProps(annotation: Any): GearBoxProps? {
+        return try {
+            val cls = annotation.javaClass
+            val gearType = cls.getMethod("getGearType").invoke(annotation)?.toString()?.uppercase()
+                ?: return null
+            val gearTier = cls.getMethod("getGearTier").invoke(annotation)?.toString()
+                ?: return null
+            val maxLevel = cls.getMethod("getLevel").invoke(annotation) as? Int ?: return null
+
+            val rangeStr = try {
+                cls.getMethod("getLevelRange").invoke(annotation)?.toString() ?: ""
+            } catch (_: Exception) { "" }
+            // rangeStr is like "<81-85>"
+            val minLevel = Regex("""<(\d+)-(\d+)>""").find(rangeStr)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: maxLevel
+
+            GearBoxProps(gearType, gearTier, minLevel, maxLevel)
+        } catch (_: Exception) { null }
+    }
+
+    private fun matchGearInfo(item: Any, props: GearBoxProps): String? {
+        val name = getItemNameStr(item) ?: return null
+        val tier = getGearTierStr(item) ?: return null
+        val type = getGearTypeStr(item) ?: return null
+        val level = getItemLevelInt(item) ?: return null
+        return if (type.uppercase() == props.gearType &&
+            tier.uppercase() == props.gearTier.uppercase() &&
+            level >= props.minLevel && level <= props.maxLevel
+        ) name else null
+    }
+
+    private fun computePossibleGearNames(props: GearBoxProps): List<String> {
+        val (modelInstance, getAllMethod) = wynntilsGearModelPair ?: return emptyList()
+        val raw = try { getAllMethod.invoke(modelInstance) } catch (_: Exception) { return emptyList() }
+        @Suppress("UNCHECKED_CAST")
+        val allItems: List<Any> = when (raw) {
+            is java.util.stream.Stream<*> -> raw.toList()
+            is Iterable<*> -> raw.toList()
+            else -> return emptyList()
+        }.filterNotNull()
+        return allItems.mapNotNull { matchGearInfo(it, props) }.sorted()
+    }
+
+    private fun getPossibleGearNames(props: GearBoxProps): List<String> =
+        gearPossibilitiesCache.getOrPut(props) { computePossibleGearNames(props) }
+
+    // ── Wynntils annotation helpers ──────────────────────────────────────────
 
     private fun tryFindWynntilsAnnotationMethod(): Pair<Any?, java.lang.reflect.Method>? {
         val handlerClass = try {
@@ -60,7 +207,6 @@ object ContainerScanner {
         }
     }
 
-    // Collect searchable text from an arbitrary object (one level deep).
     private fun collectText(obj: Any): String = buildString {
         for (m in obj.javaClass.methods) {
             if (m.parameterCount != 0 || m.declaringClass == Any::class.java) continue
@@ -75,7 +221,6 @@ object ContainerScanner {
             is Collection<*> -> for (item in v) {
                 if (item == null) continue
                 if (item is String) { append(item.lowercase()).append(' '); continue }
-                // try getName first, fall back to toString if no memory address
                 var named = false
                 for (getter in listOf("getName", "getDisplayName")) {
                     try {
@@ -90,7 +235,6 @@ object ContainerScanner {
             }
             else -> {
                 val s = v.toString()
-                // skip memory-address strings and huge blobs
                 if (!s.contains('@') && s.length < 200) append(s.lowercase()).append(' ')
             }
         }
@@ -101,18 +245,25 @@ object ContainerScanner {
         val annotation = resolveAnnotation(stack) ?: return ""
 
         val text = buildString {
-            // annotation.toString() already contains type/tier/range for GearBoxItem
             val top = annotation.toString()
             if (!top.contains('@')) append(top.lowercase()).append(' ')
 
-            // also mine the annotation's own getters for strings/collections
             for (m in annotation.javaClass.methods) {
                 if (m.parameterCount != 0 || m.declaringClass == Any::class.java) continue
                 val v = try { m.invoke(annotation) } catch (_: Exception) { continue } ?: continue
                 appendValue(v)
-                // one level deep: if the value is a non-trivial object, explore it too
                 if (v !is String && v !is Collection<*> && v !is Enum<*> && v !is Number && v !is Boolean) {
                     append(collectText(v))
+                }
+            }
+
+            // GearBoxItem: include all possible item names from Wynntils DB
+            if (annotation.javaClass.simpleName == "GearBoxItem") {
+                val props = extractGearBoxProps(annotation)
+                if (props != null) {
+                    for (name in getPossibleGearNames(props)) {
+                        append(name.lowercase()).append(' ')
+                    }
                 }
             }
         }.trim()
@@ -120,6 +271,8 @@ object ContainerScanner {
         if (text.isNotEmpty()) annotationCache[stack] = text
         return text
     }
+
+    // ── Debug output ─────────────────────────────────────────────────────────
 
     private fun debugSlot(
         slot: net.minecraft.screen.slot.Slot,
@@ -136,20 +289,23 @@ object ContainerScanner {
 
         val annotation = resolveAnnotation(stack)
         if (annotation == null) {
-            val (_, _) = wynntilsHandlerAndMethod ?: run {
+            val handler = wynntilsHandlerAndMethod
+            if (handler == null) {
                 player.sendMessage(Text.literal("§c  [W] Wynntils ItemHandler not found"), false)
-                return
+            } else {
+                player.sendMessage(Text.literal("§c  [W] No annotation on this item"), false)
             }
-            player.sendMessage(Text.literal("§c  [W] No annotation on this item"), false)
             return
         }
 
-        player.sendMessage(Text.literal("§a  [W] ${annotation.javaClass.simpleName}: §7${annotation.toString().take(100)}"), false)
+        player.sendMessage(
+            Text.literal("§a  [W] ${annotation.javaClass.simpleName}: §7${annotation.toString().take(100)}"),
+            false
+        )
 
-        // Show WynnItemData contents
+        // WynnItemData contents
         try {
-            val dataMethod = annotation.javaClass.getMethod("getData")
-            val data = dataMethod.invoke(annotation)
+            val data = annotation.javaClass.getMethod("getData").invoke(annotation)
             if (data != null) {
                 player.sendMessage(Text.literal("§b  [WynnItemData] ${data.javaClass.simpleName}"), false)
                 for (m in data.javaClass.methods) {
@@ -172,7 +328,43 @@ object ContainerScanner {
                 }
             }
         } catch (_: Exception) {}
+
+        // GearBoxItem: show possible items from Wynntils DB
+        if (annotation.javaClass.simpleName == "GearBoxItem") {
+            val props = extractGearBoxProps(annotation)
+            if (props == null) {
+                player.sendMessage(Text.literal("§c  [Possibilities] Could not read GearBox properties"), false)
+                return
+            }
+            if (wynntilsGearModelPair == null) {
+                player.sendMessage(Text.literal("§c  [Possibilities] Wynntils gear model not found"), false)
+                return
+            }
+            val possibleNames = getPossibleGearNames(props)
+            if (possibleNames.isEmpty()) {
+                player.sendMessage(
+                    Text.literal("§e  [Possibilities] 0 items found for ${props.gearType} ${props.gearTier} lv${props.minLevel}-${props.maxLevel}"),
+                    false
+                )
+            } else {
+                player.sendMessage(
+                    Text.literal("§b  [Possibilities] ${possibleNames.size} items (${props.gearType} ${props.gearTier} lv${props.minLevel}-${props.maxLevel}):"),
+                    false
+                )
+                for (itemName in possibleNames.take(15)) {
+                    player.sendMessage(Text.literal("§7    - §f$itemName"), false)
+                }
+                if (possibleNames.size > 15) {
+                    player.sendMessage(
+                        Text.literal("§7    ... and §f${possibleNames.size - 15}§7 more"),
+                        false
+                    )
+                }
+            }
+        }
     }
+
+    // ── Main registration ────────────────────────────────────────────────────
 
     fun register() {
         ScreenEvents.AFTER_INIT.register { client, screen, _, _ ->
