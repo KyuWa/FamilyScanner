@@ -116,7 +116,7 @@ object ContainerScanner {
             .joinToString(" | ") { it.string.replace(COLOR_CODE_REGEX, "") }
             .ifEmpty { "(empty)" }
 
-        val nbt = stack.get(DataComponentTypes.CUSTOM_DATA)?.nbt?.toString() ?: "(none)"
+        val nbt = stack.get(DataComponentTypes.CUSTOM_DATA)?.copyNbt()?.toString() ?: "(none)"
         val componentList = stack.components.types
             .joinToString(",") { it.toString().substringAfterLast('.') }
 
