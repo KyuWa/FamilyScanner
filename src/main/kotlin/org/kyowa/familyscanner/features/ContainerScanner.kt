@@ -19,7 +19,7 @@ object ContainerScanner {
                 return@register
             }
 
-            if (!screen.title.string.equals("Loot Chest", ignoreCase = true)) {
+            if (!screen.title.string.contains("Loot Chest", ignoreCase = true)) {
                 matchingSlots.clear()
                 hasMatch = false
                 return@register
