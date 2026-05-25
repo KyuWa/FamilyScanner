@@ -1,6 +1,7 @@
 package org.kyowa.familyscanner.mixin
 
 import net.minecraft.client.gui.DrawContext
+import net.minecraft.client.gui.screen.Screen
 import net.minecraft.client.gui.screen.ingame.HandledScreen
 import net.minecraft.screen.ScreenHandler
 import org.spongepowered.asm.mixin.Mixin
@@ -14,7 +15,7 @@ abstract class HandledScreenMixin<T : ScreenHandler> {
 
     @Inject(method = ["close"], at = [At("HEAD")], cancellable = true)
     private fun onClose(ci: CallbackInfo) {
-        if (ContainerScanner.hasMatch) {
+        if (ContainerScanner.hasMatch && !Screen.hasControlDown()) {
             ci.cancel()
         }
     }
